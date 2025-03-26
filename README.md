@@ -1,147 +1,199 @@
-# github.com/tiredofit/docker-nginx-proxy-cloudflare-companion
+# docker-nginx-proxy-cloudflare-companion
 
-[![GitHub release](https://img.shields.io/github/v/tag/tiredofit/docker-nginx-proxy-cloudflare-companion?style=flat-square)](https://github.com/tiredofit/docker-nginx-proxy-cloudflare-companion/releases/latest)
-[![Build Status](https://img.shields.io/github/workflow/status/tiredofit/docker-nginx-proxy-cloudflare-companion/build?style=flat-square)](https://github.com/tiredofit/docker-nginx-proxy-cloudflare-companion/actions?query=workflow%3Abuild)
-[![Docker Stars](https://img.shields.io/docker/stars/tiredofit/nginx-proxy-cloudflare-companion.svg?style=flat-square&logo=docker)](https://hub.docker.com/r/tiredofit/nginx-proxy-cloudflare-companion/)
-[![Docker Pulls](https://img.shields.io/docker/pulls/tiredofit/nginx-proxy-cloudflare-companion.svg?style=flat-square&logo=docker)](https://hub.docker.com/r/tiredofit/nginx-proxy-cloudflare-companion/)
-[![Become a sponsor](https://img.shields.io/badge/sponsor-tiredofit-181717.svg?logo=github&style=flat-square)](https://github.com/sponsors/tiredofit)
-[![Paypal Donate](https://img.shields.io/badge/donate-paypal-00457c.svg?logo=paypal&style=flat-square)](https://www.paypal.me/tiredofit)
+[![Paypal Donate](https://img.shields.io/badge/donate-paypal-00457c.svg?logo=paypal&style=flat-square)](https://www.paypal.com/donate/?hosted_button_id=MJQ8TQ9MEWAQE)
 
-* * *
 ## About
 
-This builds a Docker image to automatically update Cloudflare DNS records upon container start. A time saver if you are regularly moving containers around to different systems. This will allow you to set multiple zone's you wish to update.
+This Docker container automatically updates Cloudflare DNS records when containers start or update. It's particularly useful for Unraid users who want to maintain their DNS records across container restarts or when moving containers between different systems. The container supports multiple zones and can work with Nginx Proxy Manager (NPM) for automatic proxy host configuration.
 
-## Maintainer
+## Features
 
-- [Dave Conroy](http://github/tiredofit/)
+- Automatic Cloudflare DNS record updates
+- Support for multiple Cloudflare zones
+- Integration with Nginx Proxy Manager (NPM)
+- Docker Swarm mode support
+- Automatic proxy host creation in NPM
+- Support for multiple domains per container
+- Debug logging for troubleshooting
+- Docker secrets support for sensitive data
 
-## Table of Contents
+## Prerequisites
 
-- [Introduction](#introduction)
-- [Authors](#authors)
-- [Table of Contents](#table-of-contents)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-  - [Quick Start](#quick-start)
-- [Configuration](#configuration)
-  - [Volumes](#volumes)
-  - [Environment Variables](#environment-variables)
-  - [Docker Secrets](#docker-secrets)
-- [Maintenance](#maintenance)
-  - [Shell Access](#shell-access)
-- [References](#references)
-
-## Prerequisites and Assumptions
-*  Assumes you are using Nginx as a reverse proxy:
-   *  [Nginx-Proxy](https://github.com/jwilder/nginx-proxy)
+1. Unraid server with Docker installed
+2. Cloudflare account with:
+   - API token (recommended) or email/token combination
+   - Domain(s) configured
+   - Zone ID(s) for your domain(s)
+3. Nginx Proxy Manager (NPM) container (optional, for proxy host management)
+4. Docker containers with proper labels
 
 ## Installation
-### Build from Source
-Clone this repository and build the image with `docker build -t (imagename) .`
 
-### Prebuilt Images
-Builds of the image are available on [Docker Hub](https://hub.docker.com/r/tiredofit/traefik-cloudflare-companion) and is the recommended method of installation.
+### Using Unraid Community Applications
 
-```bash
-docker pull tiredofit/traefik-cloudflare-companion:(imagetag)
-```
-The following image tags are available along with their tagged release based on what's written in the [Changelog](CHANGELOG.md):
+1. Open Unraid WebUI
+2. Go to "Apps" tab
+3. Search for "nginx-proxy-cloudflare-companion"
+4. Click "Install"
+5. Configure the container using the template
 
-| Container OS | Tag       |
-| ------------ | --------- |
-| Alpine       | `:latest` |
+### Manual Installation
 
-#### Multi Architecture
-Images are built primarily for `amd64` architecture, and may also include builds for `arm/v6`, `arm/v7`, `arm64` and others. These variants are all unsupported. Consider [sponsoring](https://github.com/sponsors/tiredofit) my work so that I can work with various hardware. To see if this image supports multiple architecures, type `docker manifest (image):(tag)`
+1. Go to "Docker" tab in Unraid
+2. Click "Add Container"
+3. Click "Advanced View"
+4. Fill in the following details:
+   - Repository: `tiredofit/nginx-proxy-cloudflare-companion:latest`
+   - Name: `cloudflare-companion` (or your preferred name)
+   - Network Type: `Bridge`
 
 ## Configuration
 
-### Quick Start
+### Required Environment Variables
 
-* The quickest way to get started is using [docker-compose](https://docs.docker.com/compose/). See the examples folder for a working [docker-compose.yml](examples/docker-compose.yml) that can be modified for development or production use.
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `CF_TOKEN` | Cloudflare API Token (preferred) | `your-api-token` |
+| `CF_EMAIL` | Cloudflare Email (if not using API token) | `your@email.com` |
+| `TARGET_DOMAIN` | Your main domain that containers will point to | `home.example.com` |
+| `DOMAIN1` | First domain to manage | `app1.example.com` |
+| `DOMAIN1_ZONE_ID` | Cloudflare Zone ID for DOMAIN1 | `abc123def456` |
+| `DOMAIN1_PROXIED` | Whether to proxy DOMAIN1 through Cloudflare | `TRUE` |
 
-* Set various [environment variables](#environment-variables) to understand the capabilities of this image.
+### Optional Environment Variables
 
-Upon startup the image looks for a label containing `traefik.frontend.rule` (version 1) or `Host*` (version2) from your running containers of either updates Cloudflare with a CNAME record of your `TARGET_DOMAIN`. Previous versions of this container used to only update one Zone, however with the additional of the `DOMAIN` environment variables it now parses the containers variables and updates the appropriate zone.
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `DEFAULT_TTL` | TTL for DNS records | `1` | `1` |
+| `REFRESH_ENTRIES` | Update existing records | `TRUE` | `TRUE` |
+| `SWARM_MODE` | Enable Docker Swarm mode | `FALSE` | `FALSE` |
+| `CONTAINER_LOG_LEVEL` | Logging level | `INFO` | `DEBUG` |
+| `DEFAULT_PORT` | Default port for NPM proxy hosts | `8080` | `8080` |
 
-For those wishing to assign multiple CNAMEs to a container use the following format:
-### Volumes
-| File                   | Description                                                              |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `/var/run/docker.sock` | You must have access to the docker socket in order to utilize this image |
+### Nginx Proxy Manager Integration
 
-### Environment Variables
+To enable automatic proxy host creation in NPM, add these variables:
 
-#### Base Images used
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `NPM_URL` | NPM API URL | `http://npm:8181` |
+| `NPM_USERNAME` | NPM admin username | `admin@example.com` |
+| `NPM_PASSWORD` | NPM admin password | `your-password` |
+| `DEFAULT_PROXY_IP` | Default IP for proxy hosts | `192.168.1.100` |
 
-This image relies on an [Alpine Linux](https://hub.docker.com/r/tiredofit/alpine) or [Debian Linux](https://hub.docker.com/r/tiredofit/debian) base image that relies on an [init system](https://github.com/just-containers/s6-overlay) for added capabilities. Outgoing SMTP capabilities are handlded via `msmtp`. Individual container performance monitoring is performed by [zabbix-agent](https://zabbix.org). Additional tools include: `bash`,`curl`,`less`,`logrotate`, `nano`,`vim`.
+### Container Labels
 
-Be sure to view the following repositories to understand all the customizable options:
+Add these labels to your containers to enable automatic DNS and proxy host creation:
 
-| Image                                                  | Description                            |
-| ------------------------------------------------------ | -------------------------------------- |
-| [OS Base](https://github.com/tiredofit/docker-alpine/) | Customized Image based on Alpine Linux |
-
-
-| Parameter           | Description                                                                             | Default                      |
-| ------------------- | --------------------------------------------------------------------------------------- | ---------------------------- |
-| `DOCKER_ENTRYPOINT` | Docker Entrypoint default (local mode)                                                  | `unix://var/run/docker.sock` |
-| `DOCKER_HOST`       | (optional) If using tcp connection e.g. `tcp://111.222.111.32:2376`                     |                              |
-| `DOCKER_CERT_PATH`  | (optional) If using tcp connection with TLS - Certificate location e.g. `/docker-certs` |                              |
-| `DOCKER_TLS_VERIFY` | (optional) If using tcp conneciton to socket Verify TLS                                 | `1`                          |
-| `REFRESH_ENTRIES`   | If record exists, update entry with new values `TRUE` or `FALSE`                        | `TRUE`                       |
-| `SWARM_MODE`        | Enable Docker Swarm Mode `TRUE` or `FALSE`                                              | `FALSE`                      |
-| `CF_EMAIL`          | Email address tied to Cloudflare Account - Leave Blank  for Scoped API                  |                              |
-| `CF_TOKEN`          | API Token for the Domain                                                                |                              |
-| `DEFAULT_TTL`       | TTL to apply to records                                                                 | `1`                          |
-| `TARGET_DOMAIN`     | Destination Host to forward records to e.g. `host.example.com`                          |                              |
-| `DOMAIN1`           | Domain 1 you wish to update records for.                                                |                              |
-| `DOMAIN1_ZONE_ID`   | Domain 1 Zone ID from Cloudflare                                                        |                              |
-| `DOMAIN1_PROXIED`   | Domain 1 True or False if proxied                                                       |                              |
-| `DOMAIN2`           | (optional Domain 2 you wish to update records for.)                                     |                              |
-| `DOMAIN2_ZONE_ID`   | Domain 2 Zone ID from Cloudflare                                                        |                              |
-| `DOMAIN2_PROXIED`   | Domain 1 True or False if proxied                                                       |                              |
-| `DOMAIN3....`       | And so on..                                                                             |                              |
-
-### Docker Secrets
-
-`CF_EMAIL` and `CF_TOKEN` support Docker Secrets
-Name your secrets either CF_EMAIL and CF_TOKEN or cf_email and cf_token.
-
-
-* * *
-## Maintenance
-### Shell Access
-
-For debugging and maintenance purposes you may want access the containers shell.
-
-```bash
-docker exec -it (whatever your container name is e.g. traefik-cloudflare-companion) bash
+```yaml
+labels:
+  - "npm.frontend.rule=app1.example.com"  # Single domain
+  # or
+  - "npm.frontend.rule=app1.example.com,app2.example.com"  # Multiple domains
 ```
+
+### Example Docker Compose Configuration
+
+```yaml
+version: '3'
+services:
+  cloudflare-companion:
+    image: tiredofit/nginx-proxy-cloudflare-companion:latest
+    container_name: cloudflare-companion
+    environment:
+      - CF_TOKEN=your-api-token
+      - TARGET_DOMAIN=home.example.com
+      - DOMAIN1=app1.example.com
+      - DOMAIN1_ZONE_ID=abc123def456
+      - DOMAIN1_PROXIED=TRUE
+      - NPM_URL=http://npm:8181
+      - NPM_USERNAME=admin@example.com
+      - NPM_PASSWORD=your-password
+      - DEFAULT_PROXY_IP=192.168.1.100
+      - CONTAINER_LOG_LEVEL=DEBUG
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+```
+
+### Example Application Container
+
+```yaml
+version: '3'
+services:
+  myapp:
+    image: your-app-image
+    container_name: myapp
+    labels:
+      - "npm.frontend.rule=app1.example.com"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+```
+
+## Usage
+
+1. Start the container
+2. Add the `npm.frontend.rule` label to your application containers
+3. The container will automatically:
+   - Create/update Cloudflare DNS records
+   - Create proxy hosts in NPM (if configured)
+   - Handle container restarts and updates
+
+## Troubleshooting
+
+### Enable Debug Logging
+
+Set `CONTAINER_LOG_LEVEL=DEBUG` to see detailed logs about:
+- DNS record creation/updates
+- NPM proxy host creation
+- Network configuration
+- Container discovery
+
+### Common Issues
+
+1. **DNS Records Not Updating**
+   - Check Cloudflare API token permissions
+   - Verify zone IDs are correct
+   - Check container logs for errors
+
+2. **NPM Proxy Hosts Not Creating**
+   - Verify NPM credentials
+   - Check NPM API URL is accessible
+   - Ensure container labels are correct
+
+3. **Wrong IP Address Used**
+   - Set `DEFAULT_PROXY_IP` to your server's IP
+   - Check network configuration
+   - Verify container networking mode
+
+## Maintenance
+
+### Updating the Container
+
+1. Go to "Docker" tab in Unraid
+2. Find the container
+3. Click "Check for Updates"
+4. Click "Update" if available
+
+### Backup
+
+No specific backup is needed as the container only manages DNS records and proxy hosts. However, it's recommended to:
+- Document your environment variables
+- Save your container configurations
+- Keep a record of your Cloudflare zone IDs
 
 ## Support
 
-These images were built to serve a specific need in a production environment and gradually have had more functionality added based on requests from the community.
-### Usage
-- The [Discussions board](../../discussions) is a great place for working with the community on tips and tricks of using this image.
-- Consider [sponsoring me](https://github.com/sponsors/tiredofit) personalized support.
-### Bugfixes
-- Please, submit a [Bug Report](issues/new) if something isn't working as expected. I'll do my best to issue a fix in short order.
-
-### Feature Requests
-- Feel free to submit a feature request, however there is no guarantee that it will be added, or at what timeline.
-- Consider [sponsoring me](https://github.com/sponsors/tiredofit) regarding development of features.
-
-### Updates
-- Best effort to track upstream changes, More priority if I am actively using the image in a production environment.
-- Consider [sponsoring me](https://github.com/sponsors/tiredofit) for up to date releases.
+- [GitHub Issues](https://github.com/ivanvza/docker-nginx-proxy-cloudflare-companion/issues)
+- [Unraid Forums](https://forums.unraid.net/)
 
 ## License
+
 MIT. See [LICENSE](LICENSE) for more details.
 
 ## References
 
-* https://www.cloudflare.com
-* https://github.com/tiredofit/docker-traefik-cloudflare-companion
-* https://github.com/code5-lab/dns-flare
+- [Cloudflare API Documentation](https://api.cloudflare.com/)
+- [Nginx Proxy Manager Documentation](https://nginxproxymanager.com/)
+- [Docker Documentation](https://docs.docker.com/)
