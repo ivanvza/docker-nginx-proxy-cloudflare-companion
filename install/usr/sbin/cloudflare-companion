@@ -8,11 +8,235 @@ import docker
 import json
 import os
 import re
+import requests
+from urllib.parse import urljoin
 
 DEFAULT_TTL = os.environ.get('DEFAULT_TTL', 1)
 SWARM_MODE = os.environ.get('SWARM_MODE', "FALSE")
 REFRESH_ENTRIES = os.environ.get('REFRESH_ENTRIES', "FALSE" )
 CONTAINER_LOG_LEVEL = os.environ.get('CONTAINER_LOG_LEVEL', "INFO")
+DEFAULT_PORT = 8080
+
+# NPM Configuration
+NPM_URL = os.environ.get('NPM_URL', 'http://npm:8181')
+NPM_USERNAME = os.environ.get('NPM_USERNAME')
+NPM_PASSWORD = os.environ.get('NPM_PASSWORD')
+DEFAULT_PROXY_IP = os.environ.get('DEFAULT_PROXY_IP', '127.0.0.1')
+
+def get_npm_token():
+    """Get authentication token from NPM"""
+    if CONTAINER_LOG_LEVEL == "DEBUG":
+        print("[debug] Attempting to get NPM token")
+        print(f"[debug] NPM URL: {NPM_URL}")
+        print(f"[debug] NPM Username: {NPM_USERNAME}")
+        print("[debug] Curl-like request:")
+        print(f"curl -X POST {urljoin(NPM_URL, '/api/tokens')} \\")
+        print("  -H 'Content-Type: application/json' \\")
+        print(f"  -d '{{\"identity\": \"{NPM_USERNAME}\", \"secret\": \"[REDACTED]\"}}'")
+
+    try:
+        response = requests.post(
+            urljoin(NPM_URL, '/api/tokens'),
+            json={
+                'identity': NPM_USERNAME,
+                'secret': NPM_PASSWORD
+            }
+        )
+        response.raise_for_status()
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] NPM Token Response: {response.status_code}")
+            # Redact token from response body
+            response_json = response.json()
+            if 'token' in response_json:
+                response_json['token'] = '[REDACTED]'
+            print(f"[debug] Response Body: {json.dumps(response_json)}")
+        return response.json()['token']
+    except Exception as e:
+        print(f"[error] Failed to get NPM token: {str(e)}")
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] Full error details: {str(e)}")
+        return None
+
+def get_npm_proxy_hosts(token):
+    """Get list of existing proxy hosts from NPM"""
+    if CONTAINER_LOG_LEVEL == "DEBUG":
+        print("[debug] Attempting to get NPM proxy hosts")
+        print("[debug] Curl-like request:")
+        print(f"curl -X GET {urljoin(NPM_URL, '/api/nginx/proxy-hosts')} \\")
+        print("  -H 'Content-Type: application/json' \\")
+        print("  -H 'Authorization: Bearer [REDACTED]'")
+
+    try:
+        response = requests.get(
+            urljoin(NPM_URL, '/api/nginx/proxy-hosts'),
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {token}'
+            }
+        )
+        response.raise_for_status()
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] NPM Proxy Hosts Response: {response.status_code}")
+            print(f"[debug] Response Body: {response.text}")
+        return response.json()
+    except Exception as e:
+        print(f"[error] Failed to get NPM proxy hosts: {str(e)}")
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] Full error details: {str(e)}")
+        return []
+
+def get_host_ip(container):
+    """Get the host machine's IP address that the container is running on"""
+    try:
+        # Get all networks the container is connected to
+        networks = container.attrs.get('NetworkSettings', {}).get('Networks', {})
+        
+        # Get the container's network info
+        for network_name, network_info in networks.items():
+            if CONTAINER_LOG_LEVEL == "DEBUG":
+                print(f"[debug] Checking network: {network_name}")
+                print(f"[debug] Network info: {network_info}")
+            
+            # Get the network ID
+            network_id = network_info.get('NetworkID')
+            if network_id:
+                # Inspect the network to get the IPAM config
+                network = client.networks.get(network_id)
+                if network:
+                    network_info = network.attrs
+                    if CONTAINER_LOG_LEVEL == "DEBUG":
+                        print(f"[debug] Network inspection: {network_info}")
+                    
+                    # Get the IPAM config
+                    ipam_config = network_info.get('IPAM', {}).get('Config', [])
+                    if ipam_config:
+                        # Check for AuxiliaryAddresses
+                        has_aux_addresses = False
+                        for config in ipam_config:
+                            if config.get('AuxiliaryAddresses'):
+                                has_aux_addresses = True
+                                break
+                        
+                        # If AuxiliaryAddresses exists, use the container's IP from IPAMConfig
+                        if has_aux_addresses:
+                            container_ip = network_info.get('IPAMConfig', {}).get('IPv4Address')
+                            if container_ip:
+                                if CONTAINER_LOG_LEVEL == "DEBUG":
+                                    print(f"[debug] Found AuxiliaryAddresses, using container IP: {container_ip}")
+                                return container_ip
+        
+        # If no AuxiliaryAddresses found, use the default proxy IP from environment
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] No AuxiliaryAddresses found, using default proxy IP: {DEFAULT_PROXY_IP}")
+        return DEFAULT_PROXY_IP
+    except Exception as e:
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] Error getting host IP: {str(e)}")
+        return DEFAULT_PROXY_IP
+
+def add_npm_proxy_host(token, domain, container):
+    """Add new proxy host to NPM"""
+    if CONTAINER_LOG_LEVEL == "DEBUG":
+        print("[debug] Attempting to add NPM proxy host")
+        print(f"[debug] Domain: {domain}")
+        print(f"[debug] Container ID: {container.attrs.get('Id')}")
+
+    try:
+        # Try to get exposed ports from container
+        ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
+        if ports:
+            if CONTAINER_LOG_LEVEL == "DEBUG":
+                print(f"[debug] Container ports: {ports}")
+            # Get the first exposed port
+            for port in ports.values():
+                if port and isinstance(port, list):
+                    host_port = int(port[0].get('HostPort', DEFAULT_PORT))
+                    break
+            else:
+                host_port = DEFAULT_PORT
+        else:
+            host_port = DEFAULT_PORT
+
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] Selected port: {host_port}")
+
+        # Get the host machine's IP address
+        host_ip = get_host_ip(container)
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] Using host IP: {host_ip}")
+
+        proxy_host_data = {
+            "domain_names": [domain],
+            "forward_scheme": "http",
+            "forward_host": host_ip,
+            "forward_port": host_port,
+            "certificate_id": 0,
+            "ssl_forced": False,
+            "hsts_enabled": False,
+            "hsts_subdomains": False,
+            "http2_support": False,
+            "block_exploits": False,
+            "caching_enabled": True,
+            "allow_websocket_upgrade": False,
+            "enabled": True
+        }
+
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print("[debug] Proxy host data:")
+            print(json.dumps(proxy_host_data, indent=2))
+            print("[debug] Curl-like request:")
+            print(f"curl -X POST {urljoin(NPM_URL, '/api/nginx/proxy-hosts')} \\")
+            print("  -H 'accept: application/json' \\")
+            print("  -H 'Content-Type: application/json' \\")
+            print("  -H 'Authorization: Bearer [REDACTED]' \\")
+            print(f"  -d '{json.dumps(proxy_host_data)}'")
+
+        response = requests.post(
+            urljoin(NPM_URL, '/api/nginx/proxy-hosts'),
+            headers={
+                'accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {token}'
+            },
+            json=proxy_host_data
+        )
+        response.raise_for_status()
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] NPM Add Proxy Host Response: {response.status_code}")
+            print(f"[debug] Response Body: {response.text}")
+        print(f"[info] Added proxy host for {domain} in NPM")
+        return True
+    except Exception as e:
+        print(f"[error] Failed to add NPM proxy host: {str(e)}")
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print(f"[debug] Full error details: {str(e)}")
+        return False
+
+def handle_domain(domain, container, doms):
+    """Handle domain for both Cloudflare and NPM"""
+    if CONTAINER_LOG_LEVEL == "DEBUG":
+        print(f"[debug] Handling domain: {domain}")
+        print(f"[debug] Container ID: {container.attrs.get('Id')}")
+
+    # Add to Cloudflare
+    point_domain(domain, doms)
+    
+    # Add to NPM if credentials are configured
+    if NPM_USERNAME and NPM_PASSWORD:
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print("[debug] NPM credentials found, proceeding with NPM configuration")
+        token = get_npm_token()
+        if token:
+            proxy_hosts = get_npm_proxy_hosts(token)
+            # Check if domain already exists
+            domain_exists = any(domain in host.get('domain_names', []) for host in proxy_hosts)
+            if CONTAINER_LOG_LEVEL == "DEBUG":
+                print(f"[debug] Domain exists in NPM: {domain_exists}")
+            if not domain_exists:
+                add_npm_proxy_host(token, domain, container)
+    else:
+        if CONTAINER_LOG_LEVEL == "DEBUG":
+            print("[debug] NPM credentials not found, skipping NPM configuration")
 
 def init_doms_from_env():
     RX_DOMS = re.compile('^DOMAIN[0-9]+$', re.IGNORECASE)
@@ -74,16 +298,16 @@ def check_container_nginx(c, doms):
     if CONTAINER_LOG_LEVEL == "DEBUG" :
          print ("[debug] Called check_container_nginx for:", c)
     cont_id = c.attrs.get(u'Id')
-    for prop in c.attrs.get(u'Config').get(u'Env'):
-         if u'VIRTUAL_HOST' in prop or u'DNS_NAME' in prop:
-            value = prop.split("=")[1].strip()
-            if ',' in value:
-                for v in value.split(","):
-                    print("[info] Found Container ID:",cont_id,"with Multi-Hostname",v)
-                    point_domain(v, doms)
-            else:
-                print("info Found ContainerID :",cont_id,"with Hostname", value)
-                point_domain(value, doms)
+    labels = c.attrs.get(u'Config').get(u'Labels', {})
+    if 'npm.frontend.rule' in labels:
+        value = labels['npm.frontend.rule']
+        if ',' in value:
+            for v in value.split(","):
+                print("[info] Found Container ID:",cont_id,"with Multi-Hostname",v)
+                handle_domain(v, c, doms)
+        else:
+            print("[info] Found ContainerID :",cont_id,"with Hostname", value)
+            handle_domain(value, c, doms)
 
 
 def check_service_nginx(s, doms):
@@ -91,17 +315,16 @@ def check_service_nginx(s, doms):
          print ("[debug] Called check_service_nginx for:", s)
     cont_id = s
     s = client.services.get(s)
-    for prop in s.attrs.get(u'Spec').get(u'TaskTemplate').get(u'ContainerSpec').get(u'Env'):
-         if u'VIRTUAL_HOST' in prop or u'DNS_NAME' in prop:
-            value = prop.split("=")[1].strip()
-            if ',' in value:
-                for v in value.split(","):
-                    print("[info] Found Container ID:",cont_id,"with Multi-Hostname",v)
-                    point_domain(v, doms)
-            else:
-                print("info Found ContainerID :",cont_id,"with Hostname", value)
-                point_domain(value, doms)
-         else: pass
+    labels = s.attrs.get(u'Spec').get(u'TaskTemplate').get(u'ContainerSpec').get(u'Labels', {})
+    if 'npm.frontend.rule' in labels:
+        value = labels['npm.frontend.rule']
+        if ',' in value:
+            for v in value.split(","):
+                print("[info] Found Container ID:",cont_id,"with Multi-Hostname",v)
+                handle_domain(v, s, doms)
+        else:
+            print("[info] Found ContainerID :",cont_id,"with Hostname", value)
+            handle_domain(value, s, doms)
 
 
 def init(doms):
